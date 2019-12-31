@@ -341,6 +341,18 @@ public class PGraphicsOpenGL extends PGraphics {
   /** Projection matrix stack **/
   protected float[][] projectionStack = new float[MATRIX_STACK_DEPTH][16];
 
+
+  /** Matrix that transform coordinates to the eye coordinate system **/
+  protected PMatrix3D eyeMatrix;
+
+  /** Matrix that transform coordinates to the system that results from appling the modelview transformation **/
+  protected PMatrix3D objMatrix;
+
+  /** Vectors defining the eye axes **/
+  public float forwardX, forwardY, forwardZ;
+  public float rightX, rightY, rightZ;
+  public float upX, upY, upZ;
+
   // ........................................................
 
   // Lights:
@@ -517,6 +529,21 @@ public class PGraphicsOpenGL extends PGraphics {
   /** To get data from OpenGL. */
   static protected IntBuffer intBuffer;
   static protected FloatBuffer floatBuffer;
+
+  // ........................................................
+
+  // Variables used in ray casting:
+
+  protected PVector[] ray;
+  protected PVector hit = new PVector();
+  protected PVector screen = new PVector();
+
+  protected PVector origInObjCoord = new PVector();
+  protected PVector hitInObjCoord = new PVector();
+  protected PVector dirInObjCoord = new PVector();
+
+  protected PVector origInWorldCoord = new PVector();
+  protected PVector dirInWorldCoord = new PVector();
 
   // ........................................................
 
@@ -827,6 +854,276 @@ public class PGraphicsOpenGL extends PGraphics {
 
     return true;
     */
+  }
+
+
+  //////////////////////////////////////////////////////////////
+
+  // EYE/OBJECT MATRICES
+
+
+  @Override
+  public PMatrix3D getEyeMatrix() {
+    return getEyeMatrix(null);
+  }
+
+
+  @Override
+  public PMatrix3D getEyeMatrix(PMatrix3D target) {
+    if (target == null) {
+      target = new PMatrix3D();
+    }
+    float sign = cameraUp ? +1 : -1;
+    target.set(rightX, sign * upX, forwardX, cameraX,
+               rightY, sign * upY, forwardY, cameraY,
+               rightZ, sign * upZ, forwardZ, cameraZ,
+              0,          0,  0, 1);
+    return target;
+  }
+
+
+  @Override
+  public PMatrix3D getObjectMatrix() {
+    PMatrix3D mat = new PMatrix3D();
+    mat.set(modelviewInv);
+    mat.apply(camera);
+    return mat;
+  }
+
+
+  @Override
+  public PMatrix3D getObjectMatrix(PMatrix3D target) {
+    if (target == null) {
+      target = new PMatrix3D();
+    }
+    target.set(modelviewInv);
+    target.apply(camera);
+    return target;
+  }
+
+
+  @Override
+  public void eye() {
+    eyeMatrix = getEyeMatrix(eyeMatrix);
+
+    // Erasing any previous transformation in modelview
+    modelview.set(camera);
+    modelview.apply(eyeMatrix);
+
+    // The 3x3 block of eyeMatrix is orthogonal, so taking the transpose inverts it...
+    eyeMatrix.transpose();
+    // ...and then invert the translation separately:
+    eyeMatrix.m03 = -cameraX;
+    eyeMatrix.m13 = -cameraY;
+    eyeMatrix.m23 = -cameraZ;
+    eyeMatrix.m30 = 0;
+    eyeMatrix.m31 = 0;
+    eyeMatrix.m32 = 0;
+
+    // Applying the inverse of the previous transformations in the opposite order
+    // to compute the modelview inverse
+    modelviewInv.set(eyeMatrix);
+    modelviewInv.preApply(cameraInv);
+
+    updateProjmodelview();
+  }
+
+
+  //////////////////////////////////////////////////////////////
+
+  // RAY CASTING
+
+  @Override
+  public PVector[] getRayFromScreen(float screenX, float screenY, PVector[] ray) {
+    if (ray == null || ray.length < 2) {
+      ray = new PVector[2];
+      ray[0] = new PVector();
+      ray[1] = new PVector();
+    }
+    getRayFromScreen(screenX, screenY, ray[0], ray[1]);
+    return ray;
+  }
+
+
+  @Override
+  public void getRayFromScreen(float screenX, float screenY, PVector origin, PVector direction) {
+    eyeMatrix = getEyeMatrix(eyeMatrix);
+
+    // Transforming screen coordinates to world coordinates
+    screen.x = screenX;
+    screen.y = screenY;
+    screen.z = 0;
+    eyeMatrix.mult(screen, origin);
+
+    // The direction of the ray is simply extracted from the third column of the eye matrix (the
+    // forward vector).
+    direction.set(eyeMatrix.m02, eyeMatrix.m12, eyeMatrix.m22);
+  }
+
+
+  @Override
+  public boolean intersectsSphere(float r, float screenX, float screenY) {
+    ray = getRayFromScreen(screenX, screenY, ray);
+    return intersectsSphere(r, ray[0], ray[1]);
+  }
+
+
+  @Override
+  public boolean intersectsSphere(float r, PVector origin, PVector direction) {
+    objMatrix = getObjectMatrix(objMatrix);
+    objMatrix.mult(origin, origInObjCoord);
+    PVector.add(origin, direction, hit);
+    objMatrix.mult(hit, hitInObjCoord);
+    PVector.sub(hitInObjCoord, origInObjCoord, dirInObjCoord);
+
+    return rayIntersectsSphere(origInObjCoord, dirInObjCoord, r);
+  }
+
+
+  // Ray-sphere intersecton algorithm as described in:
+  // http://paulbourke.net/geometry/circlesphere/
+  private boolean rayIntersectsSphere(PVector orig, PVector dir, float r) {
+    float d = orig.mag();
+
+    // The eye is inside the sphere
+    if (d <= r) return true;
+
+    float p = PVector.dot(orig, dir);
+
+    // Check if sphere is in front of ray
+    if (p > 0) return false;
+
+    // Check intersection of ray with sphere
+    float b = 2 * p;
+    float c = d * d - r * r;
+    float det = b * b - 4 * c;
+    return det >= 0;
+  }
+
+
+  @Override
+  public boolean intersectsBox(float size, float screenX, float screenY) {
+    ray = getRayFromScreen(screenX, screenY, ray);
+    return intersectsBox(size, size, size, ray[0], ray[1]);
+  }
+
+
+  @Override
+  public boolean intersectsBox(float w, float h, float d, float screenX, float screenY) {
+    ray = getRayFromScreen(screenX, screenY, ray);
+    return intersectsBox(w, h, d, ray[0], ray[1]);
+  }
+
+
+  @Override
+  public boolean intersectsBox(float size, PVector origin, PVector direction) {
+    return intersectsBox(size, size, size, origin, direction);
+  }
+
+
+  @Override
+  public boolean intersectsBox(float w, float h, float d, PVector origin, PVector direction) {
+    objMatrix = getObjectMatrix(objMatrix);
+    objMatrix.mult(origin, origInObjCoord);
+    PVector.add(origin, direction, hit);
+    objMatrix.mult(hit, hitInObjCoord);
+    PVector.sub(hitInObjCoord, origInObjCoord, dirInObjCoord);
+
+    return lineIntersectsAABB(origInObjCoord, dirInObjCoord, w, h, d);
+  }
+
+
+  // Line intersection with an axis-aligned bounding box (AABB), calculated using the algorithm
+  // from Amy William et al: http:// dl.acm.org/citation.cfm?id=1198748
+  private boolean lineIntersectsAABB(PVector orig, PVector dir, float w, float h, float d) {
+    float minx = -w/2;
+    float miny = -h/2;
+    float minz = -d/2;
+
+    float maxx = +w/2;
+    float maxy = +h/2;
+    float maxz = +d/2;
+
+    float idx = 1/dir.x;
+    float idy = 1/dir.y;
+    float idz = 1/dir.z;
+
+    boolean sdx = idx < 0;
+    boolean sdy = idy < 0;
+    boolean sdz = idz < 0;
+
+    float bbx = sdx ? maxx : minx;
+    float txmin = (bbx - orig.x) * idx;
+    bbx = sdx ? minx : maxx;
+    float txmax = (bbx - orig.x) * idx;
+    float bby = sdy ? maxy : miny;
+    float tymin = (bby - orig.y) * idy;
+    bby = sdy ? miny : maxy;
+    float tymax = (bby - orig.y) * idy;
+
+    if ((txmin > tymax) || (tymin > txmax)) {
+      return false;
+    }
+    if (tymin > txmin) {
+      txmin = tymin;
+    }
+    if (tymax < txmax) {
+      txmax = tymax;
+    }
+
+    float bbz = sdz ? maxz : minz;
+    float tzmin = (bbz - orig.z) * idz;
+    bbz = sdz ? minz : maxz;
+    float tzmax = (bbz - orig.z) * idz;
+
+    if ((txmin > tzmax) || (tzmin > txmax)) {
+      return false;
+    }
+    if (tzmin > txmin) {
+      txmin = tzmin;
+    }
+    if (tzmax < txmax) {
+      txmax = tzmax;
+    }
+
+    if ((txmin < defCameraFar) && (txmax > 0)) {
+      // The intersection coordinates:
+      // x = orig.x + txmin * dir.x;
+      // y = orig.y + txmin * dir.y;
+      // z = orig.z + txmin * dir.z;
+      return true;
+    }
+
+    return false;
+  }
+
+
+  @Override
+  public PVector intersectsPlane(float screenX, float screenY) {
+    ray = getRayFromScreen(screenX, screenY, ray);
+    return intersectsPlane(ray[0], ray[1]);
+  }
+
+
+  @Override
+  public PVector intersectsPlane(PVector origin, PVector direction) {
+    modelview.mult(origin, origInWorldCoord);
+    modelview.mult(direction, dirInWorldCoord);
+    dirInWorldCoord.normalize();
+
+    // Plane representation
+    PVector point = new PVector(0, 0, 0);
+    PVector normal = new PVector(0, 0, 1);
+
+    // Ray-plane intersection algorithm
+    float d = PApplet.abs(PVector.dot(normal, dirInWorldCoord));
+    if (d == 0) return null;
+
+    PVector w = PVector.sub(point, origInWorldCoord);
+    float k = PApplet.abs(PVector.dot(normal, w)/d);
+    PVector p = PVector.add(origInWorldCoord, dirInWorldCoord).setMag(k);
+
+    return p;
   }
 
 
@@ -3958,9 +4255,16 @@ public class PGraphicsOpenGL extends PGraphics {
   static protected void invTranslate(PMatrix3D matrix,
                                      float tx, float ty, float tz) {
     matrix.preApply(1, 0, 0, -tx,
-                    0, 1, 0, -ty,
-                    0, 0, 1, -tz,
-                    0, 0, 0, 1);
+        0, 1, 0, -ty,
+        0, 0, 1, -tz,
+        0, 0, 0, 1);
+  }
+
+
+  static protected void invTranslate(PMatrix2D matrix,
+                                     float tx, float ty) {
+    matrix.preApply(1, 0, -tx,
+        0, 1, -ty);
   }
 
 
@@ -4049,16 +4353,21 @@ public class PGraphicsOpenGL extends PGraphics {
   }
 
 
-  static private void invRotate(PMatrix3D matrix, float angle,
-                                float v0, float v1, float v2) {
+  static protected void invRotate(PMatrix3D matrix, float angle,
+                                  float v0, float v1, float v2) {
     float c = PApplet.cos(-angle);
     float s = PApplet.sin(-angle);
     float t = 1.0f - c;
 
     matrix.preApply((t*v0*v0) + c, (t*v0*v1) - (s*v2), (t*v0*v2) + (s*v1), 0,
-                    (t*v0*v1) + (s*v2), (t*v1*v1) + c, (t*v1*v2) - (s*v0), 0,
-                    (t*v0*v2) - (s*v1), (t*v1*v2) + (s*v0), (t*v2*v2) + c, 0,
-                    0, 0, 0, 1);
+        (t*v0*v1) + (s*v2), (t*v1*v1) + c, (t*v1*v2) - (s*v0), 0,
+        (t*v0*v2) - (s*v1), (t*v1*v2) + (s*v0), (t*v2*v2) + c, 0,
+        0, 0, 0, 1);
+  }
+
+
+  static protected void invRotate(PMatrix2D matrix, float angle) {
+    matrix.rotate(-angle);
   }
 
 
@@ -4100,6 +4409,11 @@ public class PGraphicsOpenGL extends PGraphics {
 
   static protected void invScale(PMatrix3D matrix, float x, float y, float z) {
     matrix.preApply(1/x, 0, 0, 0,  0, 1/y, 0, 0,  0, 0, 1/z, 0,  0, 0, 0, 1);
+  }
+
+
+  static protected void invScale(PMatrix2D matrix, float x, float y) {
+    matrix.preApply(1/x, 0, 0, 1/y, 0, 0);
   }
 
 
@@ -4573,15 +4887,27 @@ public class PGraphicsOpenGL extends PGraphics {
       z2 /= eyeDist;
     }
 
+    forwardX = z0;
+    forwardY = z1;
+    forwardZ = z2;
+
     // Calculating Y vector
     float y0 = upX;
     float y1 = upY;
     float y2 = upZ;
 
+    this.upX = upX;
+    this.upY = upY;
+    this.upZ = upZ;
+
     // Computing X vector as Y cross Z
     float x0 =  y1 * z2 - y2 * z1;
     float x1 = -y0 * z2 + y2 * z0;
     float x2 =  y0 * z1 - y1 * z0;
+
+    rightX = x0;
+    rightY = x1;
+    rightZ = x2;
 
     // Recompute Y = Z cross X
     y0 =  z1 * x2 - z2 * x1;
@@ -6690,7 +7016,7 @@ public class PGraphicsOpenGL extends PGraphics {
     if (tex == null || tex.contextIsOutdated()) {
       tex = addTexture(img);
       if (tex != null) {
-        boolean dispose = !img.loaded;
+        boolean dispose = img.pixels == null;
         img.loadPixels();
         tex.set(img.pixels, img.format);
         img.setModified();
@@ -7300,28 +7626,27 @@ public class PGraphicsOpenGL extends PGraphics {
     PGraphicsOpenGL ppg = getPrimaryPG();
     boolean useDefault = polyShader == null;
     if (polyShader != null) {
-      polyShader.setRenderer(this);
-      polyShader.loadAttributes();
-      polyShader.loadUniforms();
+      updateShader(polyShader);
+//      polyShader.setRenderer(this);
+//      polyShader.loadAttributes();
+//      polyShader.loadUniforms();
     }
     if (lit) {
       if (tex) {
-        if (useDefault || !polyShader.checkPolyType(PShader.TEXLIGHT)) {
+        if (useDefault || !isPolyShaderTexLight(polyShader)) {
           if (ppg.defTexlightShader == null) {
-            String[] vertSource = pgl.loadVertexShader(defTexlightShaderVertURL);
-            String[] fragSource = pgl.loadFragmentShader(defTexlightShaderFragURL);
-            ppg.defTexlightShader = new PShader(parent, vertSource, fragSource);
+            ppg.defTexlightShader = loadShaderFromURL(defTexlightShaderFragURL,
+                                                      defTexlightShaderVertURL);
           }
           shader = ppg.defTexlightShader;
         } else {
           shader = polyShader;
         }
       } else {
-        if (useDefault || !polyShader.checkPolyType(PShader.LIGHT)) {
+        if (useDefault || !isPolyShaderLight(polyShader)) {
           if (ppg.defLightShader == null) {
-            String[] vertSource = pgl.loadVertexShader(defLightShaderVertURL);
-            String[] fragSource = pgl.loadFragmentShader(defLightShaderFragURL);
-            ppg.defLightShader = new PShader(parent, vertSource, fragSource);
+            ppg.defLightShader = loadShaderFromURL(defLightShaderFragURL,
+                                                   defLightShaderVertURL);
           }
           shader = ppg.defLightShader;
         } else {
@@ -7329,28 +7654,26 @@ public class PGraphicsOpenGL extends PGraphics {
         }
       }
     } else {
-      if (polyShader != null && polyShader.accessLightAttribs()) {
+      if (isPolyShaderUsingLights(polyShader)) {
         PGraphics.showWarning(SHADER_NEED_LIGHT_ATTRIBS);
         useDefault = true;
       }
 
       if (tex) {
-        if (useDefault || !polyShader.checkPolyType(PShader.TEXTURE)) {
+        if (useDefault || !isPolyShaderTex(polyShader)) {
           if (ppg.defTextureShader == null) {
-            String[] vertSource = pgl.loadVertexShader(defTextureShaderVertURL);
-            String[] fragSource = pgl.loadFragmentShader(defTextureShaderFragURL);
-            ppg.defTextureShader = new PShader(parent, vertSource, fragSource);
+            ppg.defTextureShader = loadShaderFromURL(defTextureShaderFragURL,
+                                                     defTextureShaderVertURL);
           }
           shader = ppg.defTextureShader;
         } else {
           shader = polyShader;
         }
       } else {
-        if (useDefault || !polyShader.checkPolyType(PShader.COLOR)) {
+        if (useDefault || !isPolyShaderColor(polyShader)) {
           if (ppg.defColorShader == null) {
-            String[] vertSource = pgl.loadVertexShader(defColorShaderVertURL);
-            String[] fragSource = pgl.loadFragmentShader(defColorShaderFragURL);
-            ppg.defColorShader = new PShader(parent, vertSource, fragSource);
+            ppg.defColorShader = loadShaderFromURL(defColorShaderFragURL,
+                                                   defColorShaderVertURL);
           }
           shader = ppg.defColorShader;
         } else {
@@ -7359,11 +7682,49 @@ public class PGraphicsOpenGL extends PGraphics {
       }
     }
     if (shader != polyShader) {
-      shader.setRenderer(this);
-      shader.loadAttributes();
-      shader.loadUniforms();
+      updateShader(shader);
     }
+    updateShader(shader);
     return shader;
+  }
+
+
+  protected void updateShader(PShader shader) {
+    shader.setRenderer(this);
+    shader.loadAttributes();
+    shader.loadUniforms();
+  }
+
+
+  protected PShader loadShaderFromURL(URL fragURL, URL vertURL) {
+    String[] vertSource = pgl.loadVertexShader(vertURL);
+    String[] fragSource = pgl.loadFragmentShader(fragURL);
+    return new PShader(parent, vertSource, fragSource);
+  }
+
+
+  protected boolean isPolyShaderTexLight(PShader shader) {
+    return shader.checkPolyType(PShader.TEXLIGHT);
+  }
+
+
+  protected boolean isPolyShaderLight(PShader shader) {
+    return shader.checkPolyType(PShader.LIGHT);
+  }
+
+
+  protected boolean isPolyShaderTex(PShader shader) {
+    return shader.checkPolyType(PShader.TEXTURE);
+  }
+
+
+  protected boolean isPolyShaderColor(PShader shader) {
+    return shader.checkPolyType(PShader.COLOR);
+  }
+
+
+  protected boolean isPolyShaderUsingLights(PShader shader) {
+    return shader != null && shader.accessLightAttribs();
   }
 
 

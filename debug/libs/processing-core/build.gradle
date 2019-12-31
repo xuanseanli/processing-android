@@ -1,0 +1,28 @@
+apply plugin: 'com.android.library'
+
+android {
+    compileSdkVersion 28
+    defaultConfig {
+        minSdkVersion 17
+        targetSdkVersion 28
+    }
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['../../../core/src']
+            assets.srcDirs = ['../../../core/src/assets']
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    productFlavors {
+    }
+}
+
+dependencies {
+    implementation "com.android.support:support-v4:28.0.0"
+    implementation 'com.google.android.support:wearable:2.4.0'
+    compileOnly 'com.google.android.wearable:wearable:2.4.0'
+}

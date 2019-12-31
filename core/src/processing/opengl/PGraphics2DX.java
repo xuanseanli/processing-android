@@ -1,3 +1,25 @@
+/* -*- mode: java; c-basic-offset: 2; indent-tabs-mode: nil -*- */
+
+/*
+  Part of the Processing project - http://processing.org
+
+  Copyright (c) 2019 The Processing Foundation
+
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation, version 2.1.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General
+  Public License along with this library; if not, write to the
+  Free Software Foundation, Inc., 59 Temple Place, Suite 330,
+  Boston, MA  02111-1307  USA
+*/
+
 package processing.opengl;
 
 import static processing.core.PApplet.println;
@@ -13,18 +35,29 @@ import processing.core.PMatrix3D;
 import processing.core.PShape;
 import processing.core.PShapeSVG;
 
-// Super fast OpenGL 2D renderer by Miles Fogle:
-// https://github.com/hazmatsuitor
+/**
+ * Super fast OpenGL 2D renderer originally contributed by Miles Fogle:
+ * https://github.com/hazmatsuitor
+ *
+ * It speeds-up rendering of 2D geometry by essentially two key optimizations: packing all the
+ * vertex data in a single VBO, and using a custom stroke tessellator (see StrokeRenderer class
+ * at the end). There are a number of other, less critical optimizations, for example using a single
+ * shader for textured and non-textured geometry and a depth algorithm that allows stacking a large
+ * number of 2D shapes without z-fighting (so occlusion is based on drawing order).
+ *
+ * Some notes from Miles:
+ *
+ * for testing purposes, I found it easier to create a separate class and avoid
+ * touching existing code for now, rather than directly editing PGraphics2D/PGraphicsOpenGL
+ * if this code becomes the new P2D implementation, then it will be properly migrated/integrated
 
-//for testing purposes, I found it easier to create a separate class and avoid
-//touching existing code for now, rather than directly editing PGraphics2D/PGraphicsOpenGL
-//if this code becomes the new P2D implementation, then it will be properly migrated/integrated
-
-//NOTE: this implementation doesn't use some of Processing's OpenGL wrappers
-//(e.g. PShader, Texture) because I found it more convenient to handle them manually
-//it could probably be made to use those classes with a bit of elbow grease and a spot of guidance
-//but it may not be worth it - I doubt it would reduce complexity much, if at all
-//(if there are reasons we need to use those classes, let me know)
+ * NOTE: this implementation doesn't use some of Processing's OpenGL wrappers
+ * (e.g. PShader, Texture) because I found it more convenient to handle them manually
+ * it could probably be made to use those classes with a bit of elbow grease and a spot of guidance
+ * but it may not be worth it - I doubt it would reduce complexity much, if at all
+ * (if there are reasons we need to use those classes, let me know)
+ *
+ */
 
 //TODO: track debug performance stats
 public final class PGraphics2DX extends PGraphicsOpenGL {
@@ -35,13 +68,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   static final String WRONG_SHADER_PARAMS = "The P2D renderer does not accept shaders of different tyes";
 
   static protected final int SHADER2D = 7;
-
-  // Enables/disables matrix pre-multiplication
-  // https://github.com/processing/processing/wiki/Advanced-OpenGL#vertex-coordinates-are-in-model-space
-  // https://github.com/processing/processing/issues/2904
-  // see above URLs for some discussion on premultiplying matrix vs. flushing buffer on matrix change.
-  // rather than committing to one or the other, this implementation supports both
-  public static boolean premultiplyMatrices = true;
 
   // Uses the implementations in the parent PGraphicsOpenGL class, which is needed to to draw obj files
   // and apply shader filters.
@@ -360,8 +386,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
     if (image == null) {
       return;
     }
-
-    init();
 
     Texture t = currentPG.getTexture(image);
     texWidth = t.width;
@@ -818,9 +842,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
       return;
     }
 
-    //TODO: optimize this function, it is still pretty slow
-    //TODO: try using a lookup table and see if we can make it faster than real trig
-
     beginShape(POLYGON);
 
     //convert corner/diameter to center/radius
@@ -835,10 +856,15 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
     int segments = circleDetail(PApplet.max(rx, ry) + (stroke? strokeWeight : 0), TWO_PI);
     float step = TWO_PI / segments;
 
-    float angle = 0;
+    float cos = PApplet.cos(step);
+    float sin = PApplet.sin(step);
+    float dx = 0, dy = 1;
     for (int i = 0; i < segments; ++i) {
-      angle += step;
-      shapeVertex(x + PApplet.sin(angle) * rx, y + PApplet.cos(angle) * ry, 0, 0, fillColor, 0);
+      shapeVertex(x + dx * rx, y + dy * ry, 0, 0, fillColor, 0);
+      //this is the equivalent of multiplying the vector <dx, dy> by the 2x2 rotation matrix [[cos -sin] [sin cos]]
+      float tempx = dx * cos - dy * sin;
+      dy = dx * sin + dy * cos;
+      dx = tempx;
     }
 
     knownConvexPolygon = true;
@@ -903,17 +929,20 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
       appendContour(vertCount);
     }
 
+    float dx = PApplet.cos(start);
+    float dy = PApplet.sin(start);
+    float c = PApplet.cos(step);
+    float s = PApplet.sin(step);
     for (int i = 0; i <= segments; ++i) {
-      float s = PApplet.cos(start) * w;
-      float c = PApplet.sin(start) * h;
-
-      vertex(x + s, y + c);
-
-      start += step;
+      shapeVertex(x + dx * w, y + dy * h, 0, 0, fillColor, 0);
+      //this is the equivalent of multiplying the vector <dx, dy> by the 2x2 rotation matrix [[c -s] [s c]]
+      float tempx = dx * c - dy * s;
+      dy = dx * s + dy * c;
+      dx = tempx;
     }
 
     //for the case `(mode == PIE || mode == 0) && diff > HALF_PI`, the polygon
-    //will not actually be convex, but we still want to tessellate as if it is
+    //will not actually be convex, but due to known vertex order, we can still safely tessellate as if it is
     knownConvexPolygon = true;
     if (mode == CHORD || mode == PIE) {
       endShape(CLOSE);
@@ -1067,200 +1096,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
 
   //////////////////////////////////////////////////////////////
 
-  // MATRIX OPS
-
-
-  /*
-   * Monkey-patch all methods that modify matrices to optionally flush the vertex buffer.
-   * If you see a method that isn't here but should be, or is here but shouldn't,
-   * feel free to add/remove it.
-   */
-
-
-  @Override
-  public void applyMatrix(float n00, float n01, float n02, float n10, float n11, float n12) {
-    preMatrixChanged();
-    super.applyMatrix(n00, n01, n02, n10, n11, n12);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void applyMatrix(PMatrix2D source) {
-    preMatrixChanged();
-    super.applyMatrix(source);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void applyProjection(float n00, float n01, float n02, float n03,
-      float n10, float n11, float n12, float n13,
-      float n20, float n21, float n22, float n23,
-      float n30, float n31, float n32, float n33) {
-    preMatrixChanged();
-    super.applyProjection(n00, n01, n02, n03,
-        n10, n11, n12, n13,
-        n20, n21, n22, n23,
-        n30, n31, n32, n33);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void applyProjection(PMatrix3D mat) {
-    preMatrixChanged();
-    super.applyProjection(mat);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void popMatrix() {
-    preMatrixChanged();
-    super.popMatrix();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void popProjection() {
-    preMatrixChanged();
-    super.popProjection();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void pushMatrix() {
-    preMatrixChanged();
-    super.pushMatrix();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void pushProjection() {
-    preMatrixChanged();
-    super.pushProjection();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void resetMatrix() {
-    preMatrixChanged();
-    super.resetMatrix();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void resetProjection() {
-    preMatrixChanged();
-    super.resetProjection();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void rotate(float angle) {
-    preMatrixChanged();
-    super.rotate(angle);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void scale(float s) {
-    preMatrixChanged();
-    super.scale(s);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void scale(float sx, float sy) {
-    preMatrixChanged();
-    super.scale(sx, sy);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void setMatrix(PMatrix2D source) {
-    preMatrixChanged();
-    super.setMatrix(source);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void setProjection(PMatrix3D mat) {
-    preMatrixChanged();
-    super.setProjection(mat);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void shearX(float angle) {
-    preMatrixChanged();
-    super.shearX(angle);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void shearY(float angle) {
-    preMatrixChanged();
-    super.shearY(angle);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void translate(float tx, float ty) {
-    preMatrixChanged();
-    super.translate(tx, ty);
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void updateProjmodelview() {
-    preMatrixChanged();
-    super.updateProjmodelview();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void updateGLModelview() {
-    preMatrixChanged();
-    super.updateGLModelview();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void updateGLProjection() {
-    preMatrixChanged();
-    super.updateGLProjection();
-    postMatrixChanged();
-  }
-
-
-  @Override
-  public void updateGLProjmodelview() {
-    preMatrixChanged();
-    super.updateGLProjmodelview();
-    postMatrixChanged();
-  }
-
-
-  //////////////////////////////////////////////////////////////
-
   // MATRIX MORE!
 
 
@@ -1285,8 +1120,10 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   // SHADER FILTER
 
 
+
   @Override
   public void filter(PShader shader) {
+    // TODO: not working... the loadShader() method uses the P2 vertex stage
     // The filter method needs to use the geometry-generation in the base class.
     // We could re-implement it here, but this is easier.
     if (!useParentImpl) {
@@ -1299,9 +1136,27 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   }
 
 
+
   //////////////////////////////////////////////////////////////
 
   // SHADER API
+
+
+  @Override
+  public PShader loadShader(String fragFilename) {
+    if (fragFilename == null || fragFilename.equals("")) {
+      PGraphics.showWarning(MISSING_FRAGMENT_SHADER);
+      return null;
+    }
+
+    PShader shader = new PShader(parent);
+
+    shader.setFragmentShader(fragFilename);
+    String[] vertSource = pgl.loadVertexShader(defP2DShaderVertURL);
+    shader.setVertexShader(vertSource);
+
+    return shader;
+  }
 
 
   @Override
@@ -1498,24 +1353,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   // PRIVATE IMPLEMENTATION
 
 
-  //superclass does lazy initialization, so we need to as well
-  private void init() {
-    if (initialized) return;
-    initialized = true;
-
-    String[] vertSource = pgl.loadVertexShader(defP2DShaderVertURL);
-    String[] fragSource = pgl.loadFragmentShader(defP2DShaderFragURL);
-    twoShader = new PShader(parent, vertSource, fragSource);
-    loadShaderLocs(twoShader);
-    defTwoShader = twoShader;
-
-    //generate vbo
-    IntBuffer vboBuff = IntBuffer.allocate(1);
-    pgl.genBuffers(1, vboBuff);
-    vbo = vboBuff.get(0);
-  }
-
-
   //maxVerts can be tweaked for memory/performance trade-off
   //in my testing, performance seems to plateau after around 6000 (= 2000*3)
   //memory usage should be around ~165kb for 6000 verts
@@ -1531,28 +1368,31 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   private int vbo;
   private int texWidth, texHeight;
 
+  // Determination of the smallest increments and largest-greater-than-minus-one
+  // https://en.wikipedia.org/wiki/Half-precision_floating-point_format
+
+  // Using the smallest positive normal number in half (16-bit) precision, which is how the depth
+  // buffer is initialized in mobile
+  private float smallestDepthIncrement = (float)Math.pow(2, -14);
+
+  // As the limit for the depth increase, we take the minus the largest number less than one in
+  // half (16-bit) precision
+  private float largestNumberLessThanOne = 1 - (float)Math.pow(2, -11);
 
   private void incrementDepth() {
-    //by resetting the depth buffer when needed, we are able to have arbitrarily many
-    //layers, unlimited by depth buffer precision. in practice, the precision of this
-    //algorithm seems to be very good (~1,000,000 layers), so it pretty much won't happen
-    //unless you're drawing enough geometry per frame to set your computer on fire
-    if (depth < -0.9999f) {
+    // By resetting the depth buffer when needed, we are able to have arbitrarily many
+    // layers, unlimited by depth buffer precision. In practice, the precision of this
+    // algorithm seems to be acceptable (exactly (1 + 1 - pow(2, -11))/pow(2, -14) = 32,760 layers)
+    // for mobile.
+    if (depth < -largestNumberLessThanOne) {
       flushBuffer();
       pgl.clear(PGL.DEPTH_BUFFER_BIT);
-      //depth test will fail at depth = 1.0 after clearing the depth buffer,
-      //but since we always increment before drawing anything, this should be okay
+      // Depth test will fail at depth = 1.0 after clearing the depth buffer,
+      // But since we always increment before drawing anything, this should be okay
       depth = 1.0f;
     }
 
-    //found to be a small but reliable increment value for a 24-bit depth buffer
-    //through trial and error. as numbers approach zero, absolute floating point
-    //precision increases, while absolute fixed point precision stays the same,
-    //so regardless of representation, this value should work for all depths in
-    //range (-1, 1), as long as it works for depths at either end of the range
-    depth -= 0.000001f;
-
-    //TODO: use an increment value based on good math instead of lazy trial-and-error
+    depth -= smallestDepthIncrement;
   }
 
 
@@ -1625,9 +1465,14 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
       return;
     }
 
-    init();
+    if (vbo == 0) {
+      // Generate vbo
+      IntBuffer vboBuff = IntBuffer.allocate(1);
+      pgl.genBuffers(1, vboBuff);
+      vbo = vboBuff.get(0);
+    }
 
-    //upload vertex data
+    // Upload vertex data
     pgl.bindBuffer(PGL.ARRAY_BUFFER, vbo);
     pgl.bufferData(PGL.ARRAY_BUFFER, usedVerts * vertSize,
         FloatBuffer.wrap(vertexData), PGL.DYNAMIC_DRAW);
@@ -1652,16 +1497,24 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
     if (positionLoc == -1) {
       positionLoc = shader.getAttributeLoc("vertex");
     }
-    int colorLoc = shader.getAttributeLoc("color");
-    int texCoordLoc = shader.getAttributeLoc("texCoord");
-    int texFactorLoc = shader.getAttributeLoc("texFactor");
+//    int colorLoc = shader.getAttributeLoc("color");
     int transformLoc = shader.getUniformLoc("transform");
     if (transformLoc == -1) {
       transformLoc = shader.getUniformLoc("transformMatrix");
     }
+
+    /*
+    // Became less demanding and 2D shaders do not need to have texture uniforms/attribs
     int texScaleLoc = shader.getUniformLoc("texScale");
-    return positionLoc != -1 && colorLoc != -1 && texCoordLoc != -1 &&
-           texFactorLoc != -1 && transformLoc != -1 && texScaleLoc != -1;
+    if (texScaleLoc == -1) {
+      texScaleLoc = shader.getUniformLoc("texOffset");
+    }
+    int texCoordLoc = shader.getAttributeLoc("texCoord");
+    int texFactorLoc = shader.getAttributeLoc("texFactor");
+    */
+
+    return positionLoc != -1 && transformLoc != -1;
+//         colorLoc != -1 && texCoordLoc != -1 && texFactorLoc != -1 && texScaleLoc != -1;
   }
 
 
@@ -1678,51 +1531,67 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
       transformLoc = shader.getUniformLoc("transformMatrix");
     }
     texScaleLoc = shader.getUniformLoc("texScale");
+    if (texScaleLoc == -1) {
+      texScaleLoc = shader.getUniformLoc("texOffset");
+    }
   }
 
 
   private PShader getShader() {
+    // TODO: Perhaps a better way to handle the new 2D rendering would be to define a PShader2D
+    // subclass of PShader...
     PShader shader;
     if (twoShader == null) {
+      if (defTwoShader == null) {
+        String[] vertSource = pgl.loadVertexShader(defP2DShaderVertURL);
+        String[] fragSource = pgl.loadFragmentShader(defP2DShaderFragURL);
+        defTwoShader = new PShader(parent, vertSource, fragSource);
+      }
       shader = defTwoShader;
     } else {
       shader = twoShader;
     }
-    if (shader != defTwoShader) {
-      loadShaderLocs(shader);
-    }
+//    if (shader != defTwoShader) {
+    loadShaderLocs(shader);
+//    }
     return shader;
   }
 
+  @Override
+  protected PShader getPolyShader(boolean lit, boolean tex) {
+    return super.getPolyShader(lit, tex);
+  }
 
   private void setAttribs() {
     pgl.vertexAttribPointer(positionLoc, 3, PGL.FLOAT, false, vertSize, 0);
     pgl.enableVertexAttribArray(positionLoc);
-    pgl.vertexAttribPointer(texCoordLoc, 2, PGL.FLOAT, false, vertSize, 3*Float.BYTES);
-    pgl.enableVertexAttribArray(texCoordLoc);
+    if (-1 < texCoordLoc) {
+      pgl.vertexAttribPointer(texCoordLoc, 2, PGL.FLOAT, false, vertSize, 3*Float.BYTES);
+      pgl.enableVertexAttribArray(texCoordLoc);
+    }
     pgl.vertexAttribPointer(colorLoc, 4, PGL.UNSIGNED_BYTE, true, vertSize, 5*Float.BYTES);
     pgl.enableVertexAttribArray(colorLoc);
-    pgl.vertexAttribPointer(texFactorLoc, 1, PGL.FLOAT, false, vertSize, 6*Float.BYTES);
-    pgl.enableVertexAttribArray(texFactorLoc);
+    if (-1 < texFactorLoc) {
+      pgl.vertexAttribPointer(texFactorLoc, 1, PGL.FLOAT, false, vertSize, 6*Float.BYTES);
+      pgl.enableVertexAttribArray(texFactorLoc);
+    }
   }
 
 
   private void loadUniforms() {
     //set matrix uniform
-    if (premultiplyMatrices) {
-      pgl.uniformMatrix4fv(transformLoc, 1, true, FloatBuffer.wrap(new PMatrix3D().get(null)));
-    } else {
-      pgl.uniformMatrix4fv(transformLoc, 1, true, FloatBuffer.wrap(projmodelview.get(null)));
-    }
+    pgl.uniformMatrix4fv(transformLoc, 1, true, FloatBuffer.wrap(new PMatrix3D().get(null)));
 
     //set texture info
     pgl.activeTexture(PGL.TEXTURE0);
     pgl.bindTexture(PGL.TEXTURE_2D, tex);
-    //enable uv scaling only for use-defined images, not for fonts
-    if (tex == imageTex) {
-      pgl.uniform2f(texScaleLoc, 1f/texWidth, 1f/texHeight);
-    } else {
-      pgl.uniform2f(texScaleLoc, 1, 1);
+    if (-1 < texScaleLoc) {
+      //enable uv scaling only for use-defined images, not for fonts
+      if (tex == imageTex) {
+        pgl.uniform2f(texScaleLoc, 1f/texWidth, 1f/texHeight);
+      } else {
+        pgl.uniform2f(texScaleLoc, 1, 1);
+      }
     }
   }
 
@@ -1746,14 +1615,9 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
 
   private void vertexImpl(float x, float y, float u, float v, int c, float f) {
     int idx = usedVerts * 7;
-    if (premultiplyMatrices) {
-      //inline multiply only x and y to avoid an allocation and a few flops
-      vertexData[idx + 0] = projmodelview.m00*x + projmodelview.m01*y + projmodelview.m03;
-      vertexData[idx + 1] = projmodelview.m10*x + projmodelview.m11*y + projmodelview.m13;
-    } else {
-      vertexData[idx + 0] = x;
-      vertexData[idx + 1] = y;
-    }
+    //inline multiply only x and y to avoid an allocation and a few flops
+    vertexData[idx + 0] = projmodelview.m00*x + projmodelview.m01*y + projmodelview.m03;
+    vertexData[idx + 1] = projmodelview.m10*x + projmodelview.m11*y + projmodelview.m13;
     vertexData[idx + 2] = depth;
     vertexData[idx + 3] = u;
     vertexData[idx + 4] = v;
@@ -1826,30 +1690,6 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
   }
 
 
-  float ellipseDetailMultiplier = 1;
-
-
-  private void preMatrixChanged() {
-    if (!premultiplyMatrices) {
-      flushBuffer();
-    }
-  }
-
-
-  private void postMatrixChanged() {
-    //this serves as a rough approximation of how much the longest axis
-    //of an ellipse will be scaled by a given matrix
-    //(in other words, the amount by which its on-screen size changes)
-    float sxi = projmodelview.m00 * width / 2;
-    float syi = projmodelview.m10 * height / 2;
-    float sxj = projmodelview.m01 * width / 2;
-    float syj = projmodelview.m11 * height / 2;
-    float Imag = PApplet.sqrt(sxi * sxi + syi * syi);
-    float Jmag = PApplet.sqrt(sxj * sxj + syj * syj);
-    ellipseDetailMultiplier = PApplet.max(Imag, Jmag);
-  }
-
-
   private void triangle(float x1, float y1, float x2, float y2, float x3, float y3, int color) {
     check(3);
     vertexImpl(x1, y1, 0, 0, color, 0);
@@ -1883,55 +1723,40 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
     triangle(x2 + tx, y2 - ty, x2 - tx, y2 + ty, x1 + tx, y1 - ty, color);
 
     if (r >= LINE_DETAIL_LIMIT && strokeCap == ROUND) {
-      float angle = PApplet.atan2(dx, dy);
-
       int segments = circleDetail(r, HALF_PI);
       float step = HALF_PI / segments;
+      float c = PApplet.cos(step);
+      float s = PApplet.sin(step);
+      for (int i = 0; i < segments; ++i) {
+        //this is the equivalent of multiplying the vector <tx, ty> by the 2x2 rotation matrix [[c -s] [s c]]
+        float nx = c * tx - s * ty;
+        float ny = s * tx + c * ty;
 
-      float psin = ty;
-      float pcos = tx;
-      for (int i = 1; i < segments; ++i) {
-        angle += step;
-        float nsin = PApplet.sin(angle) * r;
-        float ncos = PApplet.cos(angle) * r;
+        triangle(x2, y2, x2 + ty, y2 + tx, x2 + ny, y2 + nx, color);
+        triangle(x2, y2, x2 - tx, y2 + ty, x2 - nx, y2 + ny, color);
+        triangle(x1, y1, x1 - ty, y1 - tx, x1 - ny, y1 - nx, color);
+        triangle(x1, y1, x1 + tx, y1 - ty, x1 + nx, y1 - ny, color);
 
-        triangle(x2, y2, x2 + psin, y2 + pcos, x2 + nsin, y2 + ncos, color);
-        triangle(x2, y2, x2 - pcos, y2 + psin, x2 - ncos, y2 + nsin, color);
-        triangle(x1, y1, x1 - psin, y1 - pcos, x1 - nsin, y1 - ncos, color);
-        triangle(x1, y1, x1 + pcos, y1 - psin, x1 + ncos, y1 - nsin, color);
-
-        psin = nsin;
-        pcos = ncos;
+        tx = nx;
+        ty = ny;
       }
-
-      triangle(x2, y2, x2 + psin, y2 + pcos, x2 + tx, y2 - ty, color);
-      triangle(x2, y2, x2 - pcos, y2 + psin, x2 + ty, y2 + tx, color);
-      triangle(x1, y1, x1 - psin, y1 - pcos, x1 - tx, y1 + ty, color);
-      triangle(x1, y1, x1 + pcos, y1 - psin, x1 - ty, y1 - tx, color);
     }
   }
 
 
   private void singlePoint(float x, float y, int color) {
     float r = strokeWeight * 0.5f;
-    if (strokeCap == ROUND) {
+    if (r >= LINE_DETAIL_LIMIT && strokeCap == ROUND) {
       int segments = circleDetail(r);
       float step = QUARTER_PI / segments;
 
-      float x1 = 0;
-      float y1 = r;
-      float angle = 0;
+      float x1 = 0, y1 = r;
+      float c = PApplet.cos(step);
+      float s = PApplet.sin(step);
       for (int i = 0; i < segments; ++i) {
-        angle += step;
-        float x2, y2;
-        //this is not just for performance
-        //it also ensures the circle is drawn with no diagonal gaps
-        if (i < segments - 1) {
-          x2 = PApplet.sin(angle) * r;
-          y2 = PApplet.cos(angle) * r;
-        } else {
-          x2 = y2 = PApplet.sin(QUARTER_PI) * r;
-        }
+        //this is the equivalent of multiplying the vector <x1, y1> by the 2x2 rotation matrix [[c -s] [s c]]
+        float x2 = c * x1 - s * y1;
+        float y2 = s * x1 + c * y1;
 
         triangle(x, y, x + x1, y + y1, x + x2, y + y2, strokeColor);
         triangle(x, y, x + x1, y - y1, x + x2, y - y2, strokeColor);
@@ -1964,6 +1789,34 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
     float lx, ly;
     float r;
 
+
+    void arcJoin(float x, float y, float dx1, float dy1, float dx2, float dy2) {
+      //we don't need to normalize before doing these products
+      //since the vectors are the same length and only used as arguments to atan2()
+      float cross = dx1 * dy2 - dy1 * dx2;
+      float dot = dx1 * dx2 + dy1 * dy2;
+      float theta = PApplet.atan2(cross, dot);
+      int segments = circleDetail(r, theta);
+      float px = x + dx1, py = y + dy1;
+      if (segments > 1) {
+        float c = PApplet.cos(theta / segments);
+        float s = PApplet.sin(theta / segments);
+        for (int i = 1; i < segments; ++i) {
+          //this is the equivalent of multiplying the vector <dx1, dy1> by the 2x2 rotation matrix [[c -s] [s c]]
+          float tempx = c * dx1 - s * dy1;
+          dy1 = s * dx1 + c * dy1;
+          dx1 = tempx;
+
+          float nx = x + dx1;
+          float ny = y + dy1;
+          triangle(x, y, px, py, nx, ny, strokeColor);
+          px = nx;
+          py = ny;
+        }
+      }
+      triangle(x, y, px, py, x + dx2, y + dy2, strokeColor);
+    }
+
     void beginLine() {
       lineVertexCount = 0;
       r = strokeWeight * 0.5f;
@@ -1985,23 +1838,23 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
         sx = x;
         sy = y;
       } else {
-        //find leg angles
-        float angle1 = PApplet.atan2(lx - px, ly - py);
-        float angle2 = PApplet.atan2(lx -  x, ly -  y);
+        //calculate normalized direction vectors for each leg
+        float leg1x = lx - px;
+        float leg1y = ly - py;
+        float leg2x = x - lx;
+        float leg2y = y - ly;
+        float len1 = PApplet.sqrt(leg1x * leg1x + leg1y * leg1y);
+        float len2 = PApplet.sqrt(leg2x * leg2x + leg2y * leg2y);
+        leg1x /= len1;
+        leg1y /= len1;
+        leg2x /= len2;
+        leg2y /= len2;
 
-        //find minimum absolute angle between the two legs
-        //FROM: https://stackoverflow.com/a/7869457/3064745
-        //NOTE: this only works for angles that are in range [-180, 180] !!!
-        float diff = angle1 - angle2;
-        diff += diff > PI? -TWO_PI : diff < -PI? TWO_PI : 0;
-
-        if (strokeJoin == BEVEL || strokeJoin == ROUND ||
-            PApplet.abs(diff) < PI/15 || PApplet.abs(diff) > PI - 0.001f) {
-          float dx = lx - px;
-          float dy = ly - py;
-          float d = PApplet.sqrt(dx*dx + dy*dy);
-          float tx =  dy / d * r;
-          float ty = -dx / d * r;
+        float legDot = -leg1x * leg2x - leg1y * leg2y;
+        float cosPiOver15 = 0.97815f;
+        if (strokeJoin == BEVEL || strokeJoin == ROUND || legDot > cosPiOver15 || legDot < -0.999) {
+          float tx =  leg1y * r;
+          float ty = -leg1x * r;
 
           if (lineVertexCount == 2) {
             sdx = tx;
@@ -2011,28 +1864,17 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
             triangle(px + pdx, py + pdy, lx - tx, ly - ty, lx + tx, ly + ty, strokeColor);
           }
 
-          dx = x - lx;
-          dy = y - ly;
-          d = PApplet.sqrt(dx*dx + dy*dy);
-          float nx =  dy / d * r;
-          float ny = -dx / d * r;
+          float nx =  leg2y * r;
+          float ny = -leg2x * r;
 
+          float legCross = leg1x * leg2y - leg1y * leg2x;
           if (strokeJoin == ROUND) {
-            float theta1 = diff > 0? angle1 - HALF_PI : angle1 + HALF_PI;
-            float theta2 = diff > 0? angle2 + HALF_PI : angle2 - HALF_PI;
-
-            //find minimum absolute angle diff (again)
-            float delta = theta2 - theta1;
-            delta += delta > PI? -TWO_PI : delta < -PI? TWO_PI : 0;
-
-            //start and end points of arc
-            float ax1 = diff < 0? lx + tx : lx - tx;
-            float ay1 = diff < 0? ly + ty : ly - ty;
-            float ax2 = diff < 0? lx + nx : lx - nx;
-            float ay2 = diff < 0? ly + ny : ly - ny;
-
-            arcJoin(lx, ly, theta1, delta, ax1, ay1, ax2, ay2);
-          } else if (diff < 0) {
+            if (legCross > 0) {
+              arcJoin(lx, ly, tx, ty, nx, ny);
+            } else {
+              arcJoin(lx, ly, -tx, -ty, -nx, -ny);
+            }
+          } else if (legCross > 0) {
             triangle(lx, ly, lx + tx, ly + ty, lx + nx, ly + ny, strokeColor);
           } else {
             triangle(lx, ly, lx - tx, ly - ty, lx - nx, ly - ny, strokeColor);
@@ -2040,19 +1882,17 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
 
           pdx = nx;
           pdy = ny;
-        } else {
-          //find offset (hypotenuse) of miter joint
-          float theta = HALF_PI - diff/2;
-          float offset = r / PApplet.cos(theta);
-
-          //find bisecting vector
-          float angle = (angle1 + angle2)/2;
-          float bx = PApplet.sin(angle) * offset;
-          float by = PApplet.cos(angle) * offset;
-          if (PApplet.abs(angle1 - angle2) < PI) {
-            bx *= -1;
-            by *= -1;
-          }
+        } else { //miter joint
+          //find the bisecting vector
+          float x1 = leg2x - leg1x;
+          float y1 = leg2y - leg1y;
+          //find a (normalized) vector perpendicular to one of the legs
+          float x2 =  leg1y;
+          float y2 = -leg1x;
+          //scale the bisecting vector to the correct length using magic (not sure how to explain this one)
+          float dot = x1 * x2 + y1 * y2;
+          float bx = x1 * (r / dot);
+          float by = y1 * (r / dot);
 
           if (lineVertexCount == 2) {
             sdx = bx;
@@ -2073,6 +1913,26 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
       ly = y;
 
       lineVertexCount += 1;
+    }
+
+    void lineCap(float x, float y, float dx, float dy) {
+      int segments = circleDetail(r, HALF_PI);
+      float px = dy, py = -dx;
+      if (segments > 1) {
+        float c = PApplet.cos(HALF_PI / segments);
+        float s = PApplet.sin(HALF_PI / segments);
+        for (int i = 1; i < segments; ++i) {
+          //this is the equivalent of multiplying the vector <px, py> by the 2x2 rotation matrix [[c -s] [s c]]
+          float nx = c * px - s * py;
+          float ny = s * px + c * py;
+          triangle(x, y, x + px, y + py, x + nx, y + ny, strokeColor);
+          triangle(x, y, x - py, y + px, x - ny, y + nx, strokeColor);
+          px = nx;
+          py = ny;
+        }
+      }
+      triangle(x, y, x + px, y + py, x + dx, y + dy, strokeColor);
+      triangle(x, y, x - py, y + px, x - dy, y + dx, strokeColor);
     }
 
     void endLine(boolean closed) {
@@ -2117,7 +1977,7 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
         triangle(px + pdx, py + pdy, lx - tx, ly - ty, lx + tx, ly + ty, strokeColor);
 
         if (strokeCap == ROUND) {
-          lineCap(lx, ly, PApplet.atan2(dx, dy));
+          lineCap(lx, ly, -ty, tx);
         }
 
         //draw first line (with cap)
@@ -2136,57 +1996,25 @@ public final class PGraphics2DX extends PGraphicsOpenGL {
         triangle(sx + sdx, sy + sdy, fx + tx, fy + ty, fx - tx, fy - ty, strokeColor);
 
         if (strokeCap == ROUND) {
-          lineCap(fx, fy, PApplet.atan2(dx, dy));
+          lineCap(fx, fy, -ty, tx);
         }
       }
-    }
-
-    void arcJoin(float x, float y, float start, float delta, float x1, float y1, float x3, float y3) {
-      int segments = circleDetail(r, delta);
-      float step = delta / segments;
-
-      for (int i = 0; i < segments - 1; ++i) {
-        start += step;
-        float x2 = x + PApplet.sin(start) * r;
-        float y2 = y + PApplet.cos(start) * r;
-
-        triangle(x, y, x1, y1, x2, y2, strokeColor);
-
-        x1 = x2;
-        y1 = y2;
-      }
-
-      triangle(x, y, x1, y1, x3, y3, strokeColor);
-    }
-
-    //XXX: wet code, will probably get removed when we optimize lineCap()
-    void arcJoin(float x, float y, float start, float delta) {
-      int segments = circleDetail(r, delta);
-      float step = delta / segments;
-
-      float x1 = x + PApplet.sin(start) * r;
-      float y1 = y + PApplet.cos(start) * r;
-      for (int i = 0; i < segments; ++i) {
-        start += step;
-        float x2 = x + PApplet.sin(start) * r;
-        float y2 = y + PApplet.cos(start) * r;
-
-        triangle(x, y, x1, y1, x2, y2, strokeColor);
-
-        x1 = x2;
-        y1 = y2;
-      }
-    }
-
-    void lineCap(float x, float y, float angle) {
-      //TODO: optimize this
-      arcJoin(x, y, angle - HALF_PI, PI);
     }
   }
 
 
   //returns the total number of points needed to approximate an arc of a given radius and extent
   int circleDetail(float radius, float delta) {
+    //this serves as a rough approximation of how much the longest axis
+    //of an ellipse will be scaled by a given matrix
+    //(in other words, the amount by which its on-screen size changes)
+    float sxi = projmodelview.m00 * width / 2;
+    float syi = projmodelview.m10 * height / 2;
+    float sxj = projmodelview.m01 * width / 2;
+    float syj = projmodelview.m11 * height / 2;
+    float Imag2 = sxi * sxi + syi * syi;
+    float Jmag2 = sxj * sxj + syj * syj;
+    float ellipseDetailMultiplier = PApplet.sqrt(PApplet.max(Imag2, Jmag2));
     radius *= ellipseDetailMultiplier;
     return (int)(PApplet.min(127, PApplet.sqrt(radius) / QUARTER_PI * PApplet.abs(delta) * 0.75f) + 1);
   }

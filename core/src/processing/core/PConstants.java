@@ -46,10 +46,14 @@ public interface PConstants {
   // built-in rendering options
   static final String JAVA2D = "processing.core.PGraphicsAndroid2D";
   static final String P2D = "processing.opengl.PGraphics2D";
+  static final String P2DX = "processing.opengl.PGraphics2DX";
   static final String P3D = "processing.opengl.PGraphics3D";
   static final String OPENGL = P3D;
-  static final String STEREO = "processing.vr.PGraphicsVRStereo";
-  static final String MONO = "processing.vr.PGraphicsVRMono";
+  static final String STEREO = "processing.vr.VRGraphicsStereo";
+  static final String MONO = "processing.vr.VRGraphicsMono";
+  static final String VR = STEREO;
+  static final String AR = "processing.ar.ARGraphics";
+  static final String ARCORE = AR;
 
   // The PDF and DXF renderers are not available for Android.
 

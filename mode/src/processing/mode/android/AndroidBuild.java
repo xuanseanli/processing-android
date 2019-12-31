@@ -37,6 +37,7 @@ import processing.mode.java.preproc.SurfaceInfo;
 
 import java.io.*;
 import java.util.HashMap;
+import java.util.Properties;
 
 /** 
  * Class with all the infrastructure needed to build a sketch in the Android 
@@ -46,78 +47,40 @@ import java.util.HashMap;
  * package ready to upload to the Play Store.
  */
 class AndroidBuild extends JavaBuild {
-  static public final int APP       = 0;
-  static public final int WALLPAPER = 1;
-  static public final int WATCHFACE = 2;
-  static public final int VR        = 3;
-
-  // Minimum SDK's API levels required for each component:
-  static public final String MIN_SDK_APP       = "17"; // Android 4.2
-  static public final String MIN_SDK_WALLPAPER = "17"; // Android 4.2
-  static public final String MIN_SDK_VR        = "19"; // Android 4.4
-  static public final String MIN_SDK_WATCHFACE = "25"; // Android 7.1.1
+  static public final int APP          = 0;
+  static public final int WALLPAPER    = 1;
+  static public final int WATCHFACE    = 2;
+  static public final int VR           = 3;
+  static public final int AR           = 4;
   
-  // Target SDK is stored in the preferences file.
+  // Minimum SDK's API levels required for each component:
+  static public String MIN_SDK_APP;
+  static public String MIN_SDK_WALLPAPER;
+  static public String MIN_SDK_VR;
+  static public String MIN_SDK_AR;
+  static public String MIN_SDK_WATCHFACE;
+  
+  // Versions of all required dependencies
   static public String TARGET_SDK;  
   static public String TARGET_PLATFORM;
-  static {
-    TARGET_SDK = Preferences.get("android.sdk.target");
-    if (TARGET_SDK == null || PApplet.parseInt(TARGET_SDK) < 26) { 
-      TARGET_SDK = "26"; 
-      Preferences.set("android.sdk.target", TARGET_SDK);
-    }
-    TARGET_PLATFORM = "android-" + TARGET_SDK;
-  }
-
-  // Versions of support, play services, wear and VR in use, also stored in
-  // preferences file so they can be changed without having to rebuilt/reinstall
-  // the mode.
   static public String SUPPORT_VER;
-  static {
-    SUPPORT_VER = Preferences.get("android.sdk.support");
-    if (SUPPORT_VER == null || !versionCheck(SUPPORT_VER, "26.0.2")) {
-      SUPPORT_VER = "26.0.2"; 
-      Preferences.set("android.sdk.support", SUPPORT_VER);
-    }
-  }
-
   static public String PLAY_SERVICES_VER;
-  static {
-    PLAY_SERVICES_VER = Preferences.get("android.sdk.play_services");
-    if (PLAY_SERVICES_VER == null || !versionCheck(PLAY_SERVICES_VER, "11.0.4")) {
-      PLAY_SERVICES_VER = "11.0.4"; 
-      Preferences.set("android.sdk.play_services", PLAY_SERVICES_VER);
-    }
-  }  
-  
   static public String WEAR_VER;
-  static {
-    WEAR_VER = Preferences.get("android.sdk.wear");
-    if (WEAR_VER == null || !versionCheck(WEAR_VER, "2.1.0")) {
-      WEAR_VER = "2.1.0"; 
-      Preferences.set("android.sdk.wear", WEAR_VER);
-    }
-  }  
-  
   static public String GVR_VER;
-  static {
-    GVR_VER = Preferences.get("android.sdk.gvr");
-    if (GVR_VER == null || !versionCheck(GVR_VER, "1.150.0")) {
-      GVR_VER = "1.150.0";
-      Preferences.set("android.sdk.gvr", GVR_VER);
-    }
-  }  
+  static public String GAR_VER;
   
   // Main activity or service 
   static private final String APP_ACTIVITY_TEMPLATE = "AppActivity.java.tmpl";
   static private final String WALLPAPER_SERVICE_TEMPLATE = "WallpaperService.java.tmpl";
   static private final String WATCHFACE_SERVICE_TEMPLATE = "WatchFaceService.java.tmpl";
   static private final String VR_ACTIVITY_TEMPLATE = "VRActivity.java.tmpl";
+  static private final String AR_ACTIVITY_TEMPLATE = "ARActivity.java.tmpl";
   
   // Additional resources
   static private final String LAYOUT_ACTIVITY_TEMPLATE = "LayoutActivity.xml.tmpl";
   static private final String STYLES_FRAGMENT_TEMPLATE = "StylesFragment.xml.tmpl";
   static private final String STYLES_VR_TEMPLATE = "StylesVR.xml.tmpl";
+  static private final String STYLES_AR_TEMPLATE = "StylesAR.xml.tmpl";
   static private final String XML_WALLPAPER_TEMPLATE = "XMLWallpaper.xml.tmpl";
   static private final String STRINGS_WALLPAPER_TEMPLATE = "StringsWallpaper.xml.tmpl";
   static private final String XML_WATCHFACE_TEMPLATE = "XMLWatchFace.xml.tmpl";
@@ -128,19 +91,26 @@ class AndroidBuild extends JavaBuild {
   static private final String APP_GRADLE_BUILD_ECJ_TEMPLATE = "AppBuildECJ.gradle.tmpl";
   static private final String APP_GRADLE_BUILD_TEMPLATE = "AppBuild.gradle.tmpl";
   static private final String VR_GRADLE_BUILD_ECJ_TEMPLATE = "VRBuildECJ.gradle.tmpl";
-  static private final String VR_GRADLE_BUILD_TEMPLATE = "VRBuild.gradle.tmpl";  
+  static private final String VR_GRADLE_BUILD_TEMPLATE = "VRBuild.gradle.tmpl";
+  static private final String AR_GRADLE_BUILD_ECJ_TEMPLATE = "ARBuildECJ.gradle.tmpl";
+  static private final String AR_GRADLE_BUILD_TEMPLATE = "ARBuild.gradle.tmpl";
   static private final String WEAR_GRADLE_BUILD_ECJ_TEMPLATE = "WearBuildECJ.gradle.tmpl";
   static private final String WEAR_GRADLE_BUILD_TEMPLATE = "WearBuild.gradle.tmpl";
   
-  // Icon files
-  static final String ICON_36 = "icon-36.png";
-  static final String ICON_48 = "icon-48.png";
-  static final String ICON_72 = "icon-72.png";
-  static final String ICON_96 = "icon-96.png";
-  static final String ICON_144 = "icon-144.png";
-  static final String ICON_192 = "icon-192.png"; 
-  static final String WATCHFACE_ICON_CIRCULAR = "preview_circular.png";
-  static final String WATCHFACE_ICON_RECTANGULAR = "preview_rectangular.png";
+  // Launcher and watch face icon files
+  static final String[] SKETCH_LAUNCHER_ICONS = {"launcher_36.png", "launcher_48.png", 
+                                                 "launcher_72.png", "launcher_96.png", 
+                                                 "launcher_144.png", "launcher_192.png"};
+  static final String[] SKETCH_OLD_LAUNCHER_ICONS = {"icon-36.png", "icon-48.png", 
+                                                     "icon-72.png", "icon-96.png", 
+                                                     "icon-144.png", "icon-192.png"}; 
+  static final String[] BUILD_LAUNCHER_ICONS = {"mipmap-ldpi/ic_launcher.png", "mipmap-mdpi/ic_launcher.png", 
+                                                "mipmap-hdpi/ic_launcher.png", "mipmap-xhdpi/ic_launcher.png", 
+                                                "mipmap-xxhdpi/ic_launcher.png", "mipmap-xxxhdpi/ic_launcher.png"};
+  static final String[] SKETCH_WATCHFACE_ICONS = {"preview_circular.png", 
+                                                  "preview_rectangular.png"};
+  static final String[] BUILD_WATCHFACE_ICONS = {"drawable-nodpi/preview_circular.png", 
+                                                 "drawable-nodpi/preview_rectangular.png"};
   
   private int appComponent = APP;
   
@@ -169,7 +139,7 @@ class AndroidBuild extends JavaBuild {
    * Constructor.
    * @param sketch the sketch to be built
    * @param mode reference to the mode
-   * @param appComp component (regular handheld app, wallpaper, watch face, VR)
+   * @param appComp component (regular handheld app, wallpaper, watch face, VR, AR)
    * @param emu build to run in emulator or on device if false 
    */  
   public AndroidBuild(Sketch sketch, AndroidMode mode, int comp) {
@@ -233,14 +203,14 @@ class AndroidBuild extends JavaBuild {
 
 
   /**
-   * Create an Gradle Android project folder, and run the preprocessor on the 
-   * sketch. Creates the top and app modules in the case of regular, VR, and 
+   * Create an Gradle Android project folder, and run the preprocessor on the
+   * sketch. Creates the top and app modules in the case of regular, VR, AR and
    * wallpapers, and top, mobile and wear modules in the case of watch faces.
    */
   protected File createProject(boolean external) 
       throws IOException, SketchException {
     tmpFolder = createTempBuildFolder(sketch);
-    System.out.println("Build folder: " + tmpFolder.getAbsolutePath());
+    System.out.println(AndroidMode.getTextString("android_build.error.build_folder", tmpFolder.getAbsolutePath()));
 
     // Create the 'src' folder with the preprocessed code.
     srcFolder = new File(tmpFolder, module + "/src/main/java");
@@ -337,7 +307,10 @@ class AndroidBuild extends JavaBuild {
     
     String minSdk;
     String tmplFile;
-    if (appComponent == VR) {
+    if (appComponent == AR) {
+      minSdk = MIN_SDK_AR;
+      tmplFile = exportProject ? AR_GRADLE_BUILD_TEMPLATE : AR_GRADLE_BUILD_ECJ_TEMPLATE;
+    } else if (appComponent == VR) {
       minSdk = MIN_SDK_VR;
       tmplFile = exportProject ? VR_GRADLE_BUILD_TEMPLATE : VR_GRADLE_BUILD_ECJ_TEMPLATE;
     } else if (appComponent == WATCHFACE) {
@@ -352,7 +325,7 @@ class AndroidBuild extends JavaBuild {
     File appBuildFile = new File(moduleFolder, "build.gradle");    
     HashMap<String, String> replaceMap = new HashMap<String, String>();
     replaceMap.put("@@tools_folder@@", Base.getToolsFolder().getPath().replace('\\', '/'));
-    replaceMap.put("@@target_platform@@", sdk.getTargetPlatform().getPath().replace('\\', '/'));
+    replaceMap.put("@@target_platform@@", TARGET_SDK);
     replaceMap.put("@@package_name@@", getPackageName());    
     replaceMap.put("@@min_sdk@@", minSdk);  
     replaceMap.put("@@target_sdk@@", TARGET_SDK);
@@ -360,6 +333,7 @@ class AndroidBuild extends JavaBuild {
     replaceMap.put("@@play_services_version@@", PLAY_SERVICES_VER);
     replaceMap.put("@@wear_version@@", WEAR_VER);        
     replaceMap.put("@@gvr_version@@", GVR_VER);
+    replaceMap.put("@@gar_version@@", GAR_VER);
     replaceMap.put("@@version_code@@", manifest.getVersionCode());
     replaceMap.put("@@version_name@@", manifest.getVersionName());
     AndroidUtil.createFileFromTemplate(appBuildTemplate, appBuildFile, replaceMap);
@@ -381,7 +355,7 @@ class AndroidBuild extends JavaBuild {
 
     // Copy any imported libraries (their libs and assets),
     // and anything in the code folder contents to the project.
-    copyImportedLibs(libsFolder, assetsFolder);
+    copyImportedLibs(libsFolder, mainFolder, assetsFolder);
     copyCodeFolder(libsFolder);
 
     // Copy any system libraries needed by the project
@@ -429,6 +403,8 @@ class AndroidBuild extends JavaBuild {
       }      
     } else if (comp == VR) {
       writeVRActivity(srcDirectory, permissions, external);
+    } else if (comp == AR) {
+      writeARActivity(srcDirectory, permissions, external);
     }
   }
 
@@ -504,6 +480,19 @@ class AndroidBuild extends JavaBuild {
     AndroidUtil.createFileFromTemplate(javaTemplate, javaFile, replaceMap); 
   }
 
+  private void writeARActivity(final File srcDirectory, String[] permissions,
+      final boolean external) {
+    File javaTemplate = mode.getContentFile("templates/" + AR_ACTIVITY_TEMPLATE);
+    File javaFile = new File(new File(srcDirectory, getPackageName().replace(".", "/")), "MainActivity.java");
+
+    HashMap<String, String> replaceMap = new HashMap<String, String>();
+    replaceMap.put("@@package_name@@", getPackageName());
+    replaceMap.put("@@sketch_class_name@@", sketchClassName);
+    replaceMap.put("@@external@@", external ? "sketch.setExternal(true);" : "");
+
+    AndroidUtil.createFileFromTemplate(javaTemplate, javaFile, replaceMap);
+  }
+
   
   private void writeResLayoutMainActivity(final File layoutFolder) {
     File xmlTemplate = mode.getContentFile("templates/" + LAYOUT_ACTIVITY_TEMPLATE);
@@ -525,6 +514,13 @@ class AndroidBuild extends JavaBuild {
   
   private void writeResStylesVR(final File valuesFolder) {
     File xmlTemplate = mode.getContentFile("templates/" + STYLES_VR_TEMPLATE);
+    File xmlFile = new File(valuesFolder, "styles.xml");
+    AndroidUtil.createFileFromTemplate(xmlTemplate, xmlFile);
+  }
+
+
+  private void writeResStylesAR(final File valuesFolder) {
+    File xmlTemplate = mode.getContentFile("templates/" + STYLES_AR_TEMPLATE);
     File xmlFile = new File(valuesFolder, "styles.xml");
     AndroidUtil.createFileFromTemplate(xmlTemplate, xmlFile);
   }
@@ -557,7 +553,7 @@ class AndroidBuild extends JavaBuild {
   
   private void writeLocalProps(final File file) {
     final PrintWriter writer = PApplet.createWriter(file);
-    final String sdkPath = sdk.getSdkFolder().getAbsolutePath();
+    final String sdkPath = sdk.getFolder().getAbsolutePath();
     if (Platform.isWindows()) {
       // Windows needs backslashes escaped, or it will also accept forward
       // slashes in the build file. We're using the forward slashes since this
@@ -590,13 +586,16 @@ class AndroidBuild extends JavaBuild {
     } else if (comp == VR) {
       File valuesFolder = AndroidUtil.createPath(resFolder, "values");      
       writeResStylesVR(valuesFolder);  
-    }    
+    } else if (comp == AR) {
+      File valuesFolder = AndroidUtil.createPath(resFolder, "values");
+      writeResStylesAR(valuesFolder);
+    }
     
     File sketchFolder = sketch.getFolder();
-    writeAppIconFiles(sketchFolder, resFolder);
+    writeLauncherIconFiles(sketchFolder, resFolder);
     if (comp == WATCHFACE) {
       // Need the preview icons for watch faces.
-      writeWatchIconFiles(sketchFolder, resFolder);
+      writeWatchFaceIconFiles(sketchFolder, resFolder);
     }
   }
 
@@ -605,74 +604,38 @@ class AndroidBuild extends JavaBuild {
   // Icons  
   
   
-  private void writeAppIconFiles(File sketchFolder, File resFolder) {
-    File localIcon36 = new File(sketchFolder, ICON_36);
-    File localIcon48 = new File(sketchFolder, ICON_48);
-    File localIcon72 = new File(sketchFolder, ICON_72);
-    File localIcon96 = new File(sketchFolder, ICON_96);
-    File localIcon144 = new File(sketchFolder, ICON_144);
-    File localIcon192 = new File(sketchFolder, ICON_192);    
-
-    File buildIcon48 = new File(resFolder, "drawable/icon.png");
-    File buildIcon36 = new File(resFolder, "drawable-ldpi/icon.png");
-    File buildIcon72 = new File(resFolder, "drawable-hdpi/icon.png");
-    File buildIcon96 = new File(resFolder, "drawable-xhdpi/icon.png");
-    File buildIcon144 = new File(resFolder, "drawable-xxhdpi/icon.png");
-    File buildIcon192 = new File(resFolder, "drawable-xxxhdpi/icon.png");    
-
-    if (!localIcon36.exists() && !localIcon48.exists() &&
-        !localIcon72.exists() && !localIcon96.exists() &&
-        !localIcon144.exists() && !localIcon192.exists()) {
+  private void writeLauncherIconFiles(File sketchFolder, File resFolder) {
+    writeIconFiles(sketchFolder, resFolder, SKETCH_LAUNCHER_ICONS, SKETCH_OLD_LAUNCHER_ICONS, BUILD_LAUNCHER_ICONS);
+  }
+  
+  
+  private void writeWatchFaceIconFiles(File sketchFolder, File resFolder) {
+    writeIconFiles(sketchFolder, resFolder, SKETCH_WATCHFACE_ICONS, null, BUILD_WATCHFACE_ICONS);
+  }
+  
+  
+  private void writeIconFiles(File sketchFolder, File resFolder, 
+                              String[] sketchIconNames, String[] oldIconNames, String[] buildIconNames) {
+    File[] localIcons = AndroidUtil.getFileList(sketchFolder, sketchIconNames, oldIconNames);
+    File[] buildIcons = AndroidUtil.getFileList(resFolder, buildIconNames);
+    if (AndroidUtil.noFileExists(localIcons)) {
+      // If no icons are in the sketch folder, then copy all the defaults      
+      File[] defaultIcons = AndroidUtil.getFileList(mode, "icons/", sketchIconNames);      
       try {
-        // if no icons are in the sketch folder, then copy all the defaults
-        copyIcon(mode.getContentFile("icons/" + ICON_36), buildIcon36);
-        copyIcon(mode.getContentFile("icons/" + ICON_48), buildIcon48);
-        copyIcon(mode.getContentFile("icons/" + ICON_72), buildIcon72);
-        copyIcon(mode.getContentFile("icons/" + ICON_96), buildIcon96);
-        copyIcon(mode.getContentFile("icons/" + ICON_144), buildIcon144);
-        copyIcon(mode.getContentFile("icons/" + ICON_192), buildIcon192);
+        for (int i = 0; i < localIcons.length; i++) {
+          copyIcon(defaultIcons[i], buildIcons[i]);  
+        }
       } catch (IOException e) {
         e.printStackTrace();
       }
     } else {
-      // if at least one of the icons already exists, then use that across the board
+      // If at least one of the icons already exists, then use that across the board
       try {
-        if (localIcon36.exists()) copyIcon(localIcon36, buildIcon36); 
-        if (localIcon48.exists()) copyIcon(localIcon48, buildIcon48);
-        if (localIcon72.exists()) copyIcon(localIcon72, buildIcon72);
-        if (localIcon96.exists()) copyIcon(localIcon96, buildIcon96);        
-        if (localIcon144.exists()) copyIcon(localIcon144, buildIcon144);
-        if (localIcon192.exists()) copyIcon(localIcon192, buildIcon192);
+        for (int i = 0; i < localIcons.length; i++) {
+          if (localIcons[i].exists()) copyIcon(localIcons[i], buildIcons[i]);
+        }
       } catch (IOException e) {
-        System.err.println("Problem while copying app icons.");
-        e.printStackTrace();
-      }
-    }
-  }
-  
-  
-  private void writeWatchIconFiles(File sketchFolder, File resFolder) {
-    copyWatchIcon(new File(sketchFolder, WATCHFACE_ICON_CIRCULAR), 
-                  new File(resFolder, "drawable/preview_circular.png"), 
-                  mode.getContentFile("icons/" + WATCHFACE_ICON_CIRCULAR));
-    copyWatchIcon(new File(sketchFolder, WATCHFACE_ICON_RECTANGULAR), 
-        new File(resFolder, "drawable/preview_rectangular.png"), 
-        mode.getContentFile("icons/" + WATCHFACE_ICON_RECTANGULAR));
-  }
-  
-  
-  private void copyWatchIcon(File srcFile, File destFile, File defFile) {
-    if (!srcFile.exists()) {
-      try {
-        copyIcon(defFile, destFile);
-      } catch (IOException e) {
-        e.printStackTrace();
-      }      
-    } else {
-      try {
-        copyIcon(srcFile, destFile);        
-      } catch (IOException e) {
-        System.err.println("Problem while copying watch face icon.");
+        System.err.println(AndroidMode.getTextString("android_build.error.cannot_copy_icons"));
         e.printStackTrace();
       }
     }
@@ -684,72 +647,10 @@ class AndroidBuild extends JavaBuild {
     if (parent.exists() || parent.mkdirs()) {
       Util.copyFile(srcFile, destFile);
     } else {
-      System.err.println("Could not create \"" + destFile.getParentFile() + "\" folder.");
+      System.err.println(AndroidMode.getTextString("android_build.error.cannot_create_icon_folder", destFile.getParentFile()));
     }    
   }  
-  
-  
-  // ---------------------------------------------------------------------------
-  // Dependencies
-  
-  
-//  private void copyWearLib(File libsFolder) throws IOException {
-    // The wear aar is needed even when the app is not a watch face, because on
-    // devices with android < 5 the dependencies of the PWatchFace* classes
-    // cannot be resolved.
-//    copyAARFileFromSDK(sdk.getWearableFolder() + "/$VER", "wearable-$VER.aar", WEAR_VER, libsFolder);    
-//  }
-  
-  
-//  private void copySupportLibs(File libsFolder) throws IOException {
-//    copyAARFileFromSDK(sdk.getSupportLibrary() + "/support-core-utils/$VER", "support-core-utils-$VER.aar", SUPPORT_VER, libsFolder);
-//    copyAARFileFromSDK(sdk.getSupportLibrary() + "/support-compat/$VER", "support-compat-$VER.aar", SUPPORT_VER, libsFolder);
-//    copyAARFileFromSDK(sdk.getSupportLibrary() + "/support-fragment/$VER", "support-fragment-$VER.aar", SUPPORT_VER, libsFolder);
-//    copyAARFileFromSDK(sdk.getSupportLibrary() + "/support-vector-drawable/$VER", "support-vector-drawable-$VER.aar", SUPPORT_VER, libsFolder);
-//  }
-  
-  
-//  private void copyAppCompatLib(File libsFolder) throws IOException {
-//    copyAARFileFromSDK(sdk.getSupportLibrary() + "/appcompat-v7/$VER", "appcompat-v7-$VER.aar", SUPPORT_VER, libsFolder);
-//  }
-  
-  
-//  private void copyGVRLibs(File libsFolder) throws IOException {
-//    copyAARFileFromMode("/libraries/vr/gvrsdk/$VER", "sdk-base-$VER.aar", GVR_VER, libsFolder);
-//    copyAARFileFromMode("/libraries/vr/gvrsdk/$VER", "sdk-common-$VER.aar", GVR_VER, libsFolder);
-//    copyAARFileFromMode("/libraries/vr/gvrsdk/$VER", "sdk-audio-$VER.aar", GVR_VER, libsFolder);
-//  }
-  
-  /*
-  private void copyAARFileFromSDK(String srcFolder, String filename, String version, File destFolder) 
-      throws IOException {
-    String fn = filename.replace("$VER", version);
-    File srcFile = new File(srcFolder.replace("$VER", version), fn);
-    File destFile = new File(destFolder, fn);
-    if (srcFile.exists()) {
-      Util.copyFile(srcFile, destFile);
-    } else {
-      // If the AAR file does not exist in the installed SDK, gradle should be able to download it, and so
-      // we don't to anything besides printing a warning.      
-      System.out.println("Warning: cannot find AAR package " + fn + " in installed SDK, gradle will try to download.");
-    }
-  }
 
-  
-  private void copyAARFileFromMode(String srcFolder, String filename, String version, File destFolder) 
-      throws IOException {
-    String fn = filename.replace("$VER", version);
-    File srcFile = mode.getContentFile(srcFolder.replace("$VER", version) + "/" + fn);
-    File destFile = new File(destFolder, fn);
-    if (srcFile.exists()) {
-      Util.copyFile(srcFile, destFile);
-    } else {
-      // If the AAR file does not exist in the mode, gradle should be able to download it, and so
-      // we don't to anything besides printing a warning.      
-      System.out.println("Warning: cannot find AAR package " + fn + " in Android mode, gradle will try to download");
-    }
-  }  
-  */
   
   // ---------------------------------------------------------------------------
   // Export project
@@ -810,9 +711,8 @@ class AndroidBuild extends JavaBuild {
       throws IOException, InterruptedException {
     File zipAlign = sdk.getZipAlignTool();
     if (zipAlign == null || !zipAlign.exists()) {
-      Messages.showWarning("Cannot find zipaling...",
-          "The zipalign build tool needed to prepare the export package is missing.\n" +
-          "Make sure that your Android SDK was downloaded correctly.");
+      Messages.showWarning(AndroidMode.getTextString("android_build.warn.cannot_find_zipalign.title"),
+                           AndroidMode.getTextString("android_build.warn.cannot_find_zipalign.body"));
       return null;
     }
     
@@ -867,35 +767,39 @@ class AndroidBuild extends JavaBuild {
    * For each library, copy .jar and .zip files to the 'libs' folder,
    * and copy anything else to the 'assets' folder.
    */
-  private void copyImportedLibs(final File libsFolder,
+  private void copyImportedLibs(final File libsFolder, 
+                                final File mainFolder,
                                 final File assetsFolder) throws IOException {
     for (Library library : getImportedLibraries()) {
       // add each item from the library folder / export list to the output
       for (File exportFile : library.getAndroidExports()) {
         String exportName = exportFile.getName();
         
-        // Skip the GVR jars, because the gradle will resolve the dependencies
-        if (appComponent == VR && exportName.toLowerCase().startsWith("sdk-")) continue; 
+        // Skip the GVR and ARCore jars, because gradle will resolve the dependencies
+        if (appComponent == VR && exportName.toLowerCase().startsWith("sdk")) continue;
+        if (appComponent == AR && exportName.toLowerCase().startsWith("core")) continue;
 
         if (!exportFile.exists()) {
-          System.err.println(exportFile.getName() +
-                             " is mentioned in export.txt, but it's " +
-                             "a big fat lie and does not exist.");
+          System.err.println(AndroidMode.getTextString("android_build.error.export_file_does_not_exist", exportFile.getName()));
         } else if (exportFile.isDirectory()) {
           // Copy native library folders to the correct location
           if (exportName.equals("armeabi") ||
               exportName.equals("armeabi-v7a") ||
               exportName.equals("x86")) {
             Util.copyDir(exportFile, new File(libsFolder, exportName));
-          } else {
+          }
+          // Copy jni libraries (.so files) to the correct location
+          else if (exportName.equals("jniLibs")) {
+            Util.copyDir(exportFile, new File(mainFolder, exportName));
+          }
+          else {
             // Copy any other directory to the assets folder
             Util.copyDir(exportFile, new File(assetsFolder, exportName));
           }
         } else if (exportName.toLowerCase().endsWith(".zip")) {
           // As of r4 of the Android SDK, it looks like .zip files
           // are ignored in the libs folder, so rename to .jar
-          System.err.println(".zip files are not allowed in Android libraries.");
-          System.err.println("Please rename " + exportFile.getName() + " to be a .jar file.");
+          System.err.println(AndroidMode.getTextString("android_build.error.zip_files_not_allowed", exportFile.getName()));
           String jarName = exportName.substring(0, exportName.length() - 4) + ".jar";
           Util.copyFile(exportFile, new File(libsFolder, jarName));
 
@@ -960,7 +864,7 @@ class AndroidBuild extends JavaBuild {
   private File createTempBuildFolder(final Sketch sketch) throws IOException {
     final File tmp = File.createTempFile("android", "sketch");
     if (!(tmp.delete() && tmp.mkdir())) {
-      throw new IOException("Cannot create temp dir " + tmp + " to build android sketch");
+      throw new IOException(AndroidMode.getTextString("android_build.error.cannot_create_build_folder", tmp));
     }
     return tmp;
   }
@@ -968,7 +872,7 @@ class AndroidBuild extends JavaBuild {
   
   private void installGradlew(File exportFolder) throws IOException {
     File gradlewFile = mode.getContentFile("mode/gradlew.zip");
-    AndroidUtil.extractFolder(gradlewFile, exportFolder, false);
+    AndroidUtil.extractFolder(gradlewFile, exportFolder, false, true);
     if (Platform.isMacOS() || Platform.isLinux()) {
       File execFile = new File(exportFolder, "gradlew");    
       execFile.setExecutable(true);      
@@ -979,6 +883,73 @@ class AndroidBuild extends JavaBuild {
   private File createExportFolder(String name) throws IOException {
     return AndroidUtil.createSubFolder(sketch.getFolder(), name);
   }  
+  
+  
+  static public void initVersions(File file) {    
+    InputStream input;
+    try {
+      input = new FileInputStream(file);
+      Properties props = new Properties();
+      props.load(input);
+      
+      MIN_SDK_APP = props.getProperty("android-min-app");
+      MIN_SDK_WALLPAPER = props.getProperty("android-min-wallpaper");        
+      MIN_SDK_VR = props.getProperty("android-min-vr");
+      MIN_SDK_AR = props.getProperty("android-min-ar");
+      MIN_SDK_WATCHFACE = props.getProperty("android-min-wear");
+
+      // Versions of the target sdk, support, play services, wear, VR, and AR are stored in
+      // preferences file so they can be changed by the user without having to rebuilt/reinstall
+      // the mode.
+      
+      TARGET_SDK = Preferences.get("android.sdk.target");
+      String defTargetSDK = props.getProperty("android-platform");
+      if (TARGET_SDK == null || PApplet.parseInt(TARGET_SDK) != PApplet.parseInt(defTargetSDK)) {
+        TARGET_SDK = defTargetSDK;
+        Preferences.set("android.sdk.target", TARGET_SDK);
+      }
+      TARGET_PLATFORM = "android-" + TARGET_SDK;
+      
+      SUPPORT_VER = Preferences.get("android.sdk.support");
+      String defSupportVer = props.getProperty("com.android.support%support-v4");
+      if (SUPPORT_VER == null || !versionCheck(SUPPORT_VER, defSupportVer)) {
+        SUPPORT_VER = defSupportVer;
+        Preferences.set("android.sdk.support", SUPPORT_VER);
+      }        
+      
+      PLAY_SERVICES_VER = Preferences.get("android.sdk.play_services");
+      String defPlayServicesVer = props.getProperty("com.google.android.gms%play-services-wearable");
+      if (PLAY_SERVICES_VER == null || !versionCheck(PLAY_SERVICES_VER, defPlayServicesVer)) {
+        PLAY_SERVICES_VER = defPlayServicesVer;
+        Preferences.set("android.sdk.play_services", PLAY_SERVICES_VER);
+      }
+      
+      WEAR_VER = Preferences.get("android.sdk.wear");
+      String defWearVer = props.getProperty("com.google.android.support%wearable");
+      if (WEAR_VER == null || !versionCheck(WEAR_VER, defWearVer)) {
+        WEAR_VER = defWearVer;
+        Preferences.set("android.sdk.wear", WEAR_VER);
+      }
+      
+      GVR_VER = Preferences.get("android.sdk.gvr");
+      String defVRVer = props.getProperty("com.google.vr");
+      if (GVR_VER == null || !versionCheck(GVR_VER, defVRVer)) {
+        GVR_VER = defVRVer;
+        Preferences.set("android.sdk.gvr", GVR_VER);
+      }        
+      
+      GAR_VER = Preferences.get("android.sdk.ar");
+      String defARVer = props.getProperty("com.google.ar");
+      if (GAR_VER == null || !versionCheck(GAR_VER, defARVer)) {
+        GAR_VER = defARVer;
+        Preferences.set("android.sdk.ar", GAR_VER);
+      }        
+    } catch (FileNotFoundException e) {
+      e.printStackTrace();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
   
   
   static private boolean versionCheck(String currentVersion, String minVersion) {

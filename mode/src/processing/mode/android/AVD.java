@@ -44,37 +44,9 @@ public class AVD {
 
   public final static String DEFAULT_PHONE_PORT = "5566";
   public final static String DEFAULT_WEAR_PORT  = "5576";  
-  
-  static private final String AVD_CREATE_TITLE =
-    "Could not create the AVD";
-
-  static private final String AVD_CREATE_MESSAGE =
-    "The default Android emulator could not be set up. Make sure<br>" +
-    "that the Android SDK is installed properly, and that the<br>" +
-    "system images are installed for level %s.<br>" +
-    "(Between you and me, occasionally, this error is a red herring,<br>" +
-    "and your sketch may be launching shortly.)";
-
-  private static final String COMMAND_LINE_TUT_URL = 
-      "https://developer.android.com/studio/command-line/avdmanager.html";  
-  
-  static private final String AVD_LOAD_TITLE =
-    "Could not load the AVD.";
-  static private final String AVD_LOAD_MESSAGE =
-    "This could mean that the Android tools need to be updated,<br>" +
-    "or that the Processing AVD should be deleted (it will<br>" +
-    "automatically re-created the next time you run Processing).<br><br>" +
-    "You can use the avdmanager command line tool to create AVDs manually and list " +
-    "the current AVDs, check <a href=\"" + COMMAND_LINE_TUT_URL + "\">this online tutorial</a> for more info.";
 
   private static final String GETTING_START_TUT_URL = 
-      "http://android.processing.org/tutorials/getting_started/index.html";    
-  
-  static private final String AVD_TARGET_TITLE =
-    "The SDK is not properly instaled";
-  static private final String AVD_TARGET_MESSAGE =
-      "Please re-read the installation instructions for Processing<br>" +
-      "found in <a href=\"" + GETTING_START_TUT_URL + "\">this online tutorial</a>.";
+      "http://android.processing.org/tutorials/getting_started/index.html";  
   
   static final String DEFAULT_SDCARD_SIZE = "64M";
   
@@ -188,8 +160,8 @@ public class AVD {
     try {
       avdList = new ArrayList<String>();
       badList = new ArrayList<String>();
-      ProcessBuilder pb =
-              new ProcessBuilder(sdk.getAvdManagerPath(), "list", "avd");
+      File avdManager = sdk.getAVDManagerTool();
+      ProcessBuilder pb = new ProcessBuilder(avdManager.getCanonicalPath(), "list", "avd");
       Map<String, String> env = pb.environment();
       env.clear();
       env.put("JAVA_HOME", Platform.getJavaHome().getCanonicalPath());
@@ -314,12 +286,13 @@ public class AVD {
   
   protected void getImages(final ArrayList<String> images, final AndroidSDK sdk, 
       final String imageAbi) throws IOException {
-    boolean wear = type == WEAR;
+    final boolean wear = type == WEAR;
     final String imagePlatform = getPreferredPlatform(wear, imageAbi);
     final String imageTag = getPreferredTag(wear, imageAbi); 
     
+    final File avdManager = sdk.getAVDManagerTool();
     final String[] cmd = new String[] {
-        sdk.getAvdManagerPath(),
+        avdManager.getCanonicalPath(),
         "create", "avd",
         "-n", "dummy",
         "-k", "dummy"
@@ -389,8 +362,9 @@ public class AVD {
     if (!androidFolder.exists()) androidFolder.mkdir();    
     File avdPath = new File(androidFolder, "avd/" + name);
     
+    File avdManager = sdk.getAVDManagerTool();
     final String[] cmd = new String[] {
-        sdk.getAvdManagerPath(),
+        avdManager.getCanonicalPath(),
         "create", "avd",
         "-n", name,      
         "-k", getSdkId(),
@@ -447,11 +421,12 @@ public class AVD {
 
       if (outWriter.toString().contains("Package path is not valid")) {
         // They didn't install the Google APIs
-        AndroidUtil.showMessage(AVD_TARGET_TITLE, AVD_TARGET_MESSAGE);
+        AndroidUtil.showMessage(AndroidMode.getTextString("android_avd.error.sdk_wrong_install_title"),
+                                AndroidMode.getTextString("android_avd.error.sdk_wrong_install_body", GETTING_START_TUT_URL));
       } else {
         // Just generally not working
-        AndroidUtil.showMessage(AVD_CREATE_TITLE, 
-                                String.format(AVD_CREATE_MESSAGE, AndroidBuild.TARGET_SDK));
+        AndroidUtil.showMessage(AndroidMode.getTextString("android_avd.error.cannot_create_avd_title"),
+                                AndroidMode.getTextString("android_avd.error.cannot_create_avd_body", AndroidBuild.TARGET_SDK));
       }
       System.err.println(outWriter.toString());
       //System.err.println(createAvdResult);
@@ -473,7 +448,8 @@ public class AVD {
         return true;
       }
       if (avd.badness()) {
-        AndroidUtil.showMessage(AVD_LOAD_TITLE, AVD_LOAD_MESSAGE);
+        AndroidUtil.showMessage(AndroidMode.getTextString("android_avd.error.cannot_load_avd_title"), 
+                                AndroidMode.getTextString("android_avd.error.cannot_load_avd_body"));
         return false;
       }
       if (!avd.hasImages(sdk)) {
@@ -494,8 +470,8 @@ public class AVD {
       }
     } catch (final Exception e) {
       e.printStackTrace();
-      AndroidUtil.showMessage(AVD_CREATE_TITLE, 
-                              String.format(AVD_CREATE_MESSAGE, AndroidBuild.TARGET_SDK));
+      AndroidUtil.showMessage(AndroidMode.getTextString("android_avd.error.cannot_create_avd_title"),
+                              AndroidMode.getTextString("android_avd.error.cannot_create_avd_body", AndroidBuild.TARGET_SDK));
     }
     return false;
   }
